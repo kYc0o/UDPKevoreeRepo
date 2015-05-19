@@ -69,10 +69,25 @@ public class UDPServer {
                             Session session = new Session(artifact, remoteAddress, remotePort, repositoryRoot);
                             sessions.put(remoteAddress, session);
                             session.nextStep(serverSocket);
+                            System.out.printf("==========> There are %d sessions available\n", sessions.size());
                         } else {
-                            // well, maybe a packet was lost the first time, repeat the step
+                            // is it a new artifact?
                             Session session = sessions.get(remoteAddress);
-                            session.nextStep(serverSocket);
+                            if (!session.artifact.equals(artifact)) {
+                                // remove the old one
+                                sessions.remove(remoteAddress);
+                                // Ok, a new request
+                                session = new Session(artifact, remoteAddress, remotePort, repositoryRoot);
+                                sessions.put(remoteAddress, session);
+                                session.nextStep(serverSocket);
+
+                                System.out.printf("==========> There are %d sessions available\n", sessions.size());
+                            }
+                            else {
+                                // well, maybe a packet was lost the first time, repeat the step
+                                session = sessions.get(remoteAddress);
+                                session.nextStep(serverSocket);
+                            }
                         }
                         break;
                     case ProtocolCommand.CMD_GET_PACKET:
@@ -80,7 +95,6 @@ public class UDPServer {
                         tmpBB = buffer.slice();
                         if (sessions.containsKey(remoteAddress)) {
 
-                            // well, maybe a packet was lost the first time, repeat the step
                             Session session = sessions.get(remoteAddress);
                             session.moveIfNecessaryToNextState();
                             session.setTemporaryBufferWithData(tmpBB);
@@ -142,6 +156,8 @@ class Session {;
 
     State state;
     int associatedValue;
+
+    int lastPacketId;
 
     private ByteBuffer temporaryBufferWithData;
 
@@ -207,16 +223,19 @@ class Session {;
             return;
         }
 
+        long l = file.length();
+        long packets = l / ProtocolCommand.PACKAGE_SIZE;
+        if (l % ProtocolCommand.PACKAGE_SIZE != 0) {
+            packets++;
+        }
+
         switch (state) {
             case SendingSummary:
-                long l = file.length();
+
 
                 System.out.printf("FILE SIZE IS %d\n", l);
 
-                long packets = l / ProtocolCommand.PACKAGE_SIZE;
-                if (l % ProtocolCommand.PACKAGE_SIZE != 0) {
-                    packets++;
-                }
+
 
                 byte[] data = new byte[8];
                 buffer = ByteBuffer.wrap(data);
@@ -242,6 +261,7 @@ class Session {;
                 break;
             case SendingPacket:
                 int packet_id = (temporaryBufferWithData.get(0) & 0x000000FF) | ((temporaryBufferWithData.get(1) & 0x000000FF) << 8);
+                lastPacketId = packet_id;
                 System.out.println("Asking for packet " + packet_id);
                 raf = new RandomAccessFile(file, "r");
                 raf.seek(packet_id * ProtocolCommand.PACKAGE_SIZE);
@@ -266,6 +286,11 @@ class Session {;
                 sendPacket = new DatagramPacket(tmp, tmp.length, remoteAddress, remotePort);
                 datagramSocket.send(sendPacket);
                 System.out.printf("\tSending chunk back with crc %d and size %d\n", crc, tmp.length);
+
+                if (lastPacketId + 1 == packets) {
+                    // Ok, maybe the session is over, setup the timer
+                }
+
                 break;
         }
 
